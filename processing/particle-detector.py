@@ -48,7 +48,8 @@ class ParticleImageProcessor:
         self.processing_metrics = {
             'start_time' : None,        # Time of processing start
             'stop_time' : None,         # Time of processing stop
-            'processing_time' : None    # Amount of time taken to process one image                        
+            'processing_time' : None,   # Amount of time taken to process one image           
+            'processing_time_normalised' : None # Normalise for image size (seconds per pixel)        
         }
 
     def _start_timer(self):
@@ -57,6 +58,10 @@ class ParticleImageProcessor:
     def _stop_timer(self):
         self.processing_metrics['stop_time'] = time.time()
         self.processing_metrics['processing_time'] = float(self.processing_metrics['stop_time']) - float(self.processing_metrics['start_time'])
+        # Calculate performance of the image processor: how many pixels per second can we manage?
+        n_pixels = float(self.image_meta['size_x']) * float(self.image_meta['size_y'])
+        if self.processing_metrics['processing_time'] is not None:
+            self.processing_metrics['processing_time_normalised'] = n_pixels / self.processing_metrics['processing_time'] 
 
     def _measure_noise(self):
         """
@@ -117,7 +122,6 @@ class ParticleImageProcessor:
         """
         Perform preprocessing for low-quality image.
         """
-
         # Define the motion kernel for deblurring (assuming motion in the x-axis)
         kernel_size = 9  # Adjust the kernel size according to the blur extent
         motion_kernel = np.zeros((kernel_size, kernel_size))
@@ -148,7 +152,6 @@ class ParticleImageProcessor:
         """
         Perform preprocessing on a high-quality image.
         """
-
         # Apply Gaussian blurring
         self.image['preprocessed'] = cv2.fastNlMeansDenoising(self.image['grayscale'], None, h=10, templateWindowSize=30, searchWindowSize=30)
         self.image['preprocessed'] = cv2.GaussianBlur(self.image['preprocessed'], (3, 3), 16)
@@ -220,10 +223,13 @@ class ParticleImageProcessor:
             validity (boolean): True if a valid particle is bounded by the contour.
         """
 
-        area = cv2.contourArea(contour)
-        perimeter = cv2.arcLength(contour, True)
-        circularity = 4 * np.pi * (area / (perimeter * perimeter))
+        circularity = 0
         circularity_threshold = 0.8
+        
+        if contour is not None:
+            area = cv2.contourArea(contour)
+            perimeter = cv2.arcLength(contour, True)
+            circularity = 4 * np.pi * (area / (perimeter * perimeter))
         return (circularity > circularity_threshold)
 
     def _detect_particles_low_quality(self):
@@ -408,11 +414,25 @@ class ParticleImageProcessor:
         # Mean Particle Circularity
         self.particle_metrics['mean_particle_circularity'] = np.mean(self.particle_metrics['particle_circularity_distribution'])
 
+    def _format_processing_time(self, value):
+        if value < 1000:
+            return f"{value:.1f} Pixels s⁻¹"
+        elif value < 1e6:
+            return f"{value / 1e3:.1f} kPixels / s"
+        elif value < 1e9:
+            return f"{value / 1e6:.1f} MPixels / s"
+        else:
+            return f"{value / 1e9:.1f} GPixels / s"
+
     def _annotate_data(self):
 
         # We'll annotate the sample input image
         sample = self.image['sample']
-
+        
+        # Format the 'number of pixels processed per second' metric
+        processing_time = self.processing_metrics['processing_time_normalised']
+        formatted_time = self._format_processing_time(processing_time)
+        
         # Define font properties
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.5                
@@ -433,7 +453,10 @@ class ParticleImageProcessor:
         # Overlay the sample image on the canvas with the calculated offset
         canvas[vertical_offset:vertical_offset + sample.shape[0], :sample.shape[1]] = sample
 
-        # Draw the image data metrics
+        # Draw the image data metrics        # Calculate performance of the image processor: how many pixels per second can we manage?
+        n_pixels = float(self.image_meta['size_x']) * float(self.image_meta['size_y'])
+        self.processing_metrics['processing_time_normalised'] = n_pixels / self.processing_metrics['processing_time']
+
         cv2.putText(canvas, f"IMAGE DATA", 
                     (x_offset, 1 * line_height), cv2.FONT_HERSHEY_DUPLEX, font_scale + 0.2, font_color, 1)
         cv2.putText(canvas, f"Filename: {self.image_meta['filename']}", 
@@ -449,35 +472,38 @@ class ParticleImageProcessor:
         cv2.putText(canvas, f"Resolution (um/pixel): {self.image_meta['resolution']}", 
                     (x_offset, 7 * line_height), font, font_scale, font_color, 1)
         cv2.putText(canvas, f"Processing time (s): {self.processing_metrics['processing_time']:.3f}", 
-                    (x_offset, 8 * line_height), font, font_scale, font_color, 1)
+                    (x_offset, 8 * line_height), font, font_scale, font_color, 1)      
+        cv2.putText(canvas, f"Pixels per second: {formatted_time}", 
+                    (x_offset, 9 * line_height), font, font_scale, font_color, 1)
+
         # Draw particle data metrics
         cv2.putText(canvas, f"PARTICLE DATA", 
-                    (x_offset, 10 * line_height), cv2.FONT_HERSHEY_DUPLEX, font_scale + 0.2, font_color, 1)
+                    (x_offset, 11 * line_height), cv2.FONT_HERSHEY_DUPLEX, font_scale + 0.2, font_color, 1)
         cv2.putText(canvas, f"Number of particles: {self.particle_metrics['num_particles']}", 
-                    (x_offset, 11 * line_height), font, font_scale, font_color, 1)
-        cv2.putText(canvas, f"Particle Radii (px): {self.particle_metrics['particle_radii_sorted']}", 
                     (x_offset, 12 * line_height), font, font_scale, font_color, 1)
-        cv2.putText(canvas, f"Particle size distribution: {self.particle_metrics['particle_size_distribution']}", 
+        cv2.putText(canvas, f"Particle Radii (px): {self.particle_metrics['particle_radii_sorted']}", 
                     (x_offset, 13 * line_height), font, font_scale, font_color, 1)
-        cv2.putText(canvas, f"Mean particle size (px): {self.particle_metrics['mean_particle_size']:.3f}", 
+        cv2.putText(canvas, f"Particle size distribution: {self.particle_metrics['particle_size_distribution']}", 
                     (x_offset, 14 * line_height), font, font_scale, font_color, 1)
-        cv2.putText(canvas, f"Median particle size (px): {self.particle_metrics['median_particle_size']:.3f}",
+        cv2.putText(canvas, f"Mean particle size (px): {self.particle_metrics['mean_particle_size']:.3f}", 
                     (x_offset, 15 * line_height), font, font_scale, font_color, 1)
-        cv2.putText(canvas, f"Std dev of size: {self.particle_metrics['std_dev_particle_size']:.3f}", 
+        cv2.putText(canvas, f"Median particle size (px): {self.particle_metrics['median_particle_size']:.3f}",
                     (x_offset, 16 * line_height), font, font_scale, font_color, 1)
-        cv2.putText(canvas, f"Particle density: {self.particle_metrics['particle_density']:.3f}", 
+        cv2.putText(canvas, f"Std dev of size: {self.particle_metrics['std_dev_particle_size']:.3f}", 
                     (x_offset, 17 * line_height), font, font_scale, font_color, 1)
-        cv2.putText(canvas, f"Coverage: {self.particle_metrics['particle_coverage']:.3f}", 
+        cv2.putText(canvas, f"Particle density: {self.particle_metrics['particle_density']:.3f}", 
                     (x_offset, 18 * line_height), font, font_scale, font_color, 1)
-        cv2.putText(canvas, f"Mean particle circularity: {self.particle_metrics['mean_particle_circularity']:.3f}", 
+        cv2.putText(canvas, f"Coverage: {self.particle_metrics['particle_coverage']:.3f}", 
                     (x_offset, 19 * line_height), font, font_scale, font_color, 1)
+        cv2.putText(canvas, f"Mean particle circularity: {self.particle_metrics['mean_particle_circularity']:.3f}", 
+                    (x_offset, 20 * line_height), font, font_scale, font_color, 1)
         # Iterate over each value in the circularity distribution list and format it
         formatted_circularity_distribution = [f"{value:.3f}" for value in self.particle_metrics['particle_circularity_distribution']]
         # Join the formatted values into a single string
         formatted_circularity_distribution_str = ', '.join(formatted_circularity_distribution)
         # Draw the circularity distribution on the canvas
         cv2.putText(canvas, f"Circularity distribution: {formatted_circularity_distribution_str}", 
-                    (x_offset, 20 * line_height), font, font_scale, font_color, 1)
+                    (x_offset, 21 * line_height), font, font_scale, font_color, 1)
 
         # Save the processed image
         self.image['processed'] = canvas
