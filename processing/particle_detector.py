@@ -69,7 +69,6 @@ class ParticleImageProcessor:
         Then we can see how much noise was effectively removed to know how much was
         originally present in the image. Make sense?
         """
-        
         image = self.image['grayscale']
 
         # Apply median filtering
@@ -85,6 +84,17 @@ class ParticleImageProcessor:
         noise_level_percentage = (np.sum(diff) / (image.shape[0] * image.shape[1] * max_diff)) * 100
         self.image_meta['noise_level'] = noise_level_percentage
 
+    def _load_stream(self, stream_ip):
+        cap = cv2.VideoCapture()
+        # print(f'http://{stream_ip}:81/stream')
+        cap.open(f'http://{stream_ip}:81/stream')
+        has_frame, frame = cap.read()
+        if (has_frame):
+            self.image['sample'] = frame
+            self.image['grayscale'] = cv2.cvtColor(self.image['sample'], cv2.COLOR_BGR2GRAY)
+            self._get_image_meta_data()
+
+            
     def _load_image(self, filepath):
         """
         Load an image from the specified path and create a grayscale copy.
@@ -118,58 +128,32 @@ class ParticleImageProcessor:
         # Blurry < Clear, we say 10 is a clear image, 0 is a useless image
         self.image_meta['blurriness'] = average_gradient
 
-    def _preprocess_low_quality(self):
+    def _preprocess_thresholding(self):
         """
-        Perform preprocessing for low-quality image.
+        Perform preprocessing using an adaptive thresholding algorithm.
         """
-        # Define the motion kernel for deblurring (assuming motion in the x-axis)
-        kernel_size = 9  # Adjust the kernel size according to the blur extent
-        motion_kernel = np.zeros((kernel_size, kernel_size))
-        motion_kernel[int((kernel_size - 1)/2), :] = np.ones(kernel_size)
-        motion_kernel /= kernel_size
+        self.image['preprocessed'] = cv2.adaptiveThreshold(self.image['preprocessed'], 
+                                                   255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                                   cv2.THRESH_BINARY, 11, 7)
 
-        # Perform Wiener deconvolution for motion deblurring
-        self.image['preprocessed'] = cv2.filter2D(self.image['grayscale'], -1, motion_kernel)
-
-        # Equalise and threshold
-        self.image['preprocessed'] = cv2.equalizeHist(self.image['preprocessed'])
-        _, self.image['preprocessed'] = cv2.threshold(self.image['preprocessed'], 24, 255, cv2.THRESH_BINARY)
-
-        # Apply Sobel edge detection
-        sobel_x = cv2.Sobel(self.image['preprocessed'], cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y = cv2.Sobel(self.image['preprocessed'], cv2.CV_64F, 0, 1, ksize=5)
-
-        # Combine the gradient image to obtain the magnitude
-        sobel_magnitude = cv2.magnitude(sobel_x, sobel_y)
-
-        # Normalise the Sobel edge magnitude image
-        sobel_magnitude_normalized = cv2.normalize(sobel_magnitude, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-
-        # Threshold the Sobel edge magnitude image to obtain a binary edge image
-        _, self.image['preprocessed'] = cv2.threshold(sobel_magnitude_normalized, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-
-    def _preprocess_high_quality(self):
+    def _preprocess_gaussian_blur(self):
         """
-        Perform preprocessing on a high-quality image.
-        """
-        # Apply Gaussian blurring
-        self.image['preprocessed'] = cv2.fastNlMeansDenoising(self.image['grayscale'], None, h=10, templateWindowSize=30, searchWindowSize=30)
+        Perform preprocessing step: applying Gaussian blur
+        """        
         self.image['preprocessed'] = cv2.GaussianBlur(self.image['preprocessed'], (3, 3), 16)
 
-        # Define the kernel for dilation
-        kernel = np.ones((3,3), np.uint8)
-        # Perform dilation operation
-        self.image['preprocessed'] = cv2.dilate(self.image['preprocessed'], kernel, iterations=1)
-
     def _preprocess_image(self):
-        if (self.image_meta['blurriness'] < 10):
-            self._preprocess_low_quality()
-        else:
-            self._preprocess_high_quality()
+        # Start point of all preprocessed images is grayscale representation
+        self.image['preprocessed'] = self.image['grayscale']
+        # Apply Gaussian blur to remove high frequency noise from the image
+        self._preprocess_gaussian_blur()
+        # Apply an adaptive thresholding algorithm to isolate key areas from the image
+        self._preprocess_thresholding()
 
-    def _get_image_meta_data(self, filepath):
-        self.image_meta['filepath'] = filepath  # Location of the image
-        self.image_meta['filename'] = os.path.basename(filepath)
+    def _get_image_meta_data(self, filepath=None):
+        if filepath is not None:
+            self.image_meta['filepath'] = filepath  # Location of the image
+            self.image_meta['filename'] = os.path.basename(filepath)
         
         # Store image dimension info
         self.image_meta['size_x'] = self.image['sample'].shape[1]  # Width of the image
@@ -183,6 +167,24 @@ class ParticleImageProcessor:
 
         # Measure the blurriness of the image
         self._measure_blurriness()
+
+    def process_stream(self, stream_ip):
+        """
+        Perform real-time video processing
+        """
+        try:
+
+                self.__init__()
+                self._start_timer()
+                self._load_stream(stream_ip)
+                self._preprocess_image()
+                self._detect_particles()
+                self._draw_contours()
+                self._get_metrics()
+                self._annotate_data()
+        except Exception as e:
+            print(f"Error processing image: {e}")
+            self._stop_timer()
 
     def process_image(self, filepath=None):
         """
@@ -251,9 +253,9 @@ class ParticleImageProcessor:
         Detect particles in the input image using Hough Circle Transform for high-quality images.
         """
 
-        self.image['preprocessed'] = cv2.fastNlMeansDenoising(self.image['grayscale'], None, h=10, templateWindowSize=30, searchWindowSize=30)
-        kernel = np.ones((5,5), np.uint8)
-        self.image['preprocessed'] = cv2.dilate(self.image['preprocessed'], kernel, iterations=1)
+        # self.image['preprocessed'] = cv2.fastNlMeansDenoising(self.image['grayscale'], None, h=10, templateWindowSize=30, searchWindowSize=30)
+        # kernel = np.ones((5,5), np.uint8)
+        # self.image['preprocessed'] = cv2.dilate(self.image['preprocessed'], kernel, iterations=1)
         circles = cv2.HoughCircles(self.image['preprocessed'], cv2.HOUGH_GRADIENT, dp=1, minDist=40,
                                     param1=70, param2=50, minRadius=10, maxRadius=500)
         if circles is not None:
@@ -314,11 +316,11 @@ class ParticleImageProcessor:
         """
         Detect particles in the input image.
         """
-        IMAGE_QUALITY_THRESHOLD = 10
-        if self.image_meta['blurriness'] < IMAGE_QUALITY_THRESHOLD:
-            self._detect_particles_low_quality()
-        else:
-            self._detect_particles_high_quality()
+        # IMAGE_QUALITY_THRESHOLD = 10
+        # if self.image_meta['blurriness'] < IMAGE_QUALITY_THRESHOLD:
+        self._detect_particles_high_quality()
+        # # else:
+        # self._detect_particles_low_quality()
 
         # Remove the erronous particle detections
         self._filter_particles()
@@ -566,7 +568,7 @@ def process_all_images(proc, folder_path):
 # proc.process_image("/home/fin/projects/auto-fluidics/img/sample-14.png")
 
 # # For batch testing and tuning
-proc = ParticleImageProcessor()
-sample_image_folder = "/home/fin/projects/auto-fluidics/img/"
-avg_time = process_all_images(proc, sample_image_folder)
-print(f"Average processing time: {avg_time:.3f} s")
+# proc = ParticleImageProcessor()
+# sample_image_folder = "/home/fin/projects/auto-fluidics/img/"
+# avg_time = process_all_images(proc, sample_image_folder)
+# print(f"Average processing time: {avg_time:.3f} s")
