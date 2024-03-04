@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"idf.espIdfPath": "/home/fin/esp/v5.2/esp-idf",
+		"idf.pythonBinPath": "/home/fin/.espressif/python_env/idf5.2_py3.10_env/bin/python",
+		"idf.toolsPath": "/home/fin/.espressif",
+		"idf.customExtraPaths": "/home/fin/.espressif/tools/xtensa-esp-elf-gdb/12.1_20231023/xtensa-esp-elf-gdb/bin:/home/fin/.espressif/tools/riscv32-esp-elf-gdb/12.1_20231023/riscv32-esp-elf-gdb/bin:/home/fin/.espressif/tools/xtensa-esp-elf/esp-13.2.0_20230928/xtensa-esp-elf/bin:/home/fin/.espressif/tools/riscv32-esp-elf/esp-13.2.0_20230928/riscv32-esp-elf/bin:/home/fin/.espressif/tools/esp32ulp-elf/2.35_20220830/esp32ulp-elf/bin:/home/fin/.espressif/tools/openocd-esp32/v0.12.0-esp32-20230921/openocd-esp32/bin:/home/fin/.espressif/tools/esp-rom-elfs/20230320",
+		"idf.customExtraVars": {
+			"OPENOCD_SCRIPTS": "/home/fin/.espressif/tools/openocd-esp32/v0.12.0-esp32-20230921/openocd-esp32/share/openocd/scripts",
+			"ESP_ROM_ELF_DIR": "/home/fin/.espressif/tools/esp-rom-elfs/20230320/"
+		},
+		"idf.gitPath": "git"
+	}
+}
