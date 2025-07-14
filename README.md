@@ -5,180 +5,116 @@
 [![GitHub issues](https://img.shields.io/github/issues/FinOrr/auto-fluidics.svg)](https://github.com/FinOrr/auto-fluidics/issues)
 [![GitHub pull requests](https://img.shields.io/github/issues-pr/FinOrr/auto-fluidics.svg)](https://github.com/FinOrr/auto-fluidics/pulls)
 
-This repository serves as a comprehensive exploration into the development of an affordable and open-source microfluidics camera equipped with advanced computer vision capabilities. The primary objective is to create a versatile solution capable of real-time particle analysis, alongside a robust control system for analysing particle metrics. Additionally, the project aims to provide a generic API for seamless interfacing with various pumps, including pressure, syringe, or peristaltic pumps.
+A lightweight, open-source toolkit for real-time microfluidics experiments. 
+It uses computer vision to track particles and includes an API for controlling various types of pumps (pressure, syringe, peristaltic). 
+Still early days; built in spare time.
 
-## Key Features:
+## Features
 
-* Real-time particle analysis leveraging computer vision techniques
-* Integration with a control system for efficient analysis of particle metrics
-* Generic API facilitating seamless interaction with different types of pumps
+- Real-time particle detection using computer vision
+- Live video and image processing
+- Simple API for controlling pumps
+- Written in Python, with future plans for GPU/C++ support
 
-## Motivation:
+## Why?
 
-The motivation behind this project stems from the need for accessible tools in microfluidics research and experimentation. By combining affordability with open-source principles, I aim to democratise access to advanced microfluidics instrumentation, fostering innovation and collaboration within the scientific community.
+Microfluidics gear is expensive and often locked behind proprietary systems. 
+This project is my attempt to build something more accessible, flexible, and hackable: no special hardware or vendor lock-in required.
 
-The goal is to create a:
-* solution that can perform particle analysis in real-time;
-* control system to analyse the particle metrics (see [my PID autotuners](https://github.com/FinOrr/pid-autotuner)); and
-* generic API for interfacing with pressure, syringe, or peristaltic pumps. 
+---
 
-## Table of Contents
+## About
 
-1. [About the Project](#about-the-project)
-2. [Project Status](#project-status)
-3. [Getting Started](#getting-started)
-    1. [Requirements](#requirements)
-    2. [Getting the Source](#getting-the-source)
-    3. [Building](#building)
-    4. [Testing](#testing)
-    5. [Example Usage](#example-usage)
-    6. [Example Output](#example-output)
-5. [Documentation](#documentation)
-6. [Need Help?](#need-help)
-7. [Contributing](#contributing)
-8. [Further Reading](#further-reading)
-9. [Authors](#authors)
-10. [License](#license)
-11. [Acknowledgments](#acknowledgements)
+This repo is for anyone trying to do microfluidics without a massive budget or a PhD in lab automation.
 
-# About the Project
+### What it does:
 
-The motivation behind this project is to simplify the process of microfluidics experimentation. By providing an easy-to-use toolkit, we aim to empower researchers and enthusiasts to explore microfluidic phenomena without extensive technical barriers. 
+- Tracks particles in microfluidic setups (videos, streams, etc.)
+- Analyses motion and basic metrics in real time
 
-This project seeks to democratise access to advanced microfluidics instrumentation, fostering collaboration and innovation in the field.
+That’s it. It’s meant to be useful without getting in your way.
 
-**Real-Time Particle Analysis:** 
-    The project offers real-time analysis of particles within microfluidic systems, utilising computer vision algorithms.
+---
 
-**Control System Integration:**
-    It seamlessly integrates with a control system for efficient analysis of particle metrics, enhancing experimental precision and protocol development.
+## Project Status
 
-**Versatile Pump Interface:**
-    The toolkit includes a generic API for interfacing with pressure, syringe, or peristaltic pumps, ensuring compatibility with various experimental setups.
+Work in progress—actively developed when time allows. Right now it works with:
 
-**User-Friendly Interface:** 
-The project provides an intuitive and easy-to-use toolkit, enabling users to set up and conduct experiments with minimal technical expertise.
+- Local image/video files
+- Live streams (e.g., from an ESP32 camera)
+- Basic CV pipelines (which are being tweaked constantly)
 
-**[Back to top](#table-of-contents)**
-
-# Project Status
-
-This is an early work in progress, with what little free time I have.
-
-Currently implemented using Python.
-
-The methods of detection and preprocessing are constantly being updated, as more efficient pipelines are developed. Currently only tested using local images / videos, and video streams from an ESP32 device.
-
-**[Back to top](#table-of-contents)**
+---
 
 ## Getting Started
 
 ### Requirements
 
-At a minimum you will need:
+- [`git`](https://git-scm.com/downloads)
+- [`Python 3.10`](https://www.python.org/downloads/release/python-31012/)
+  - [opencv-python](https://pypi.org/project/opencv-python/) `4.9.0.80`
 
-* [`git`](https://git-scm.com/downloads), version control and source code managment
-* [`Python`](https://www.python.org/downloads/release/python-31012/), `3.10.12` is recommended
-    - [opencv-python](https://pypi.org/project/opencv-python/), `4.9.0.80` library
+### Clone
 
-
-**[Back to top](#table-of-contents)**
-
-
-
-### Getting the Source
-
-This project is hosted on GitHub. You can clone the project directly using this command:
-
-```
+```bash
 git clone --recursive git@github.com:finorr/auto-fluidics.git
-```
+````
 
-**[Back to top](#table-of-contents)**
+---
 
-### Example Usage
-
-The system is designed to operate either in real-time processing mode, or as a post-processor. The system can detect and analyse particles in images, as well as videos.
+### Example
 
 ```python
-####
-# Example script: process video using a Wi-Fi enabled microscope.
-####
 import cv2
-import sys
 import particle_detector as pdt
 
-# Create an instance of the image processor
 proc = pdt.ParticleImageProcessor()
-
-# Create an output window for viewing data
 win_name = 'Networked Stream'
 cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
 
-# Escape key exits the stream
 while cv2.waitKey(1) != 27:
-
-    # Process live video from a networked camera
     proc.process_stream(stream_ip='192.168.1.34')
 
-    # Display the processed images in the window
     if proc.image['processed'] is not None:
         cv2.imshow(win_name, proc.image['processed'])
-
-    # If no processing performed, just display the source image
     else:
         cv2.imshow(win_name, proc.image['sample'])
-    
-# Clean up and exit
+
 cv2.destroyWindow(win_name)
 ```
 
-### Example Output
+### Output
 
 ![](output/processed/sample-12.png)
-
 ![](output/processed/sample-2.png)
-
 ![](output/processed/sample-17.png)
 
-**[Back to top](#table-of-contents)**
-### Building
+---
 
-The current design uses Python. When the system is expanded to support C++ (to enable GPU acceleration), then expect this section to be updated.
+### Build
 
-**[Back to top](#table-of-contents)**
+Currently Python-only. When/if C++ support gets added (for GPU processing), this section will be updated.
 
-### Testing
+---
 
-Unit tests incoming...
+### Test
 
-**[Back to top](#table-of-contents)**
+Unit tests coming soon. For now, test by running and watching for obvious errors.
 
-## Documentation
+---
 
-Documentation incoming...
+## Docs
 
-**[Back to top](#table-of-contents)**
+Still being written. In the meantime, feel free to poke around or open an issue if anything’s unclear.
 
-## Need help?
+---
 
-If you need further assistance or have any questions, please file a GitHub issue or reach out on [Linkedin](https://www.linkedin.com/in/finorr/).
+## Help
 
-## Contributing
+If you get stuck or have questions, feel free to open a [GitHub issue](https://github.com/FinOrr/auto-fluidics/issues) or contact me on [LinkedIn](https://www.linkedin.com/in/finorr/).
 
-If you are interested in contributing to this project, please read our [contributing guidelines](docs/CONTRIBUTING.md).
-
-## Authors
-
-* **[Fin Orr](https://github.com/finorr)**
+---
 
 ## License
 
-See the [LICENSE](LICENSE) file for licensing details.
-
-## Acknowledgments
-
-Make any public acknowledgments here
-
-**[Back to top](#table-of-contents)**
-
+MIT — see [LICENSE](LICENSE) for details.
