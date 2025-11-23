@@ -2,12 +2,51 @@ import cv2
 import os
 import numpy as np
 import time
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from perception.encapsulation_detector import EncapsulationDetector
+    ENCAPSULATION_AVAILABLE = True
+except ImportError:
+    ENCAPSULATION_AVAILABLE = False
+
+try:
+    from processing.channel_detector import ChannelDetector
+    CHANNEL_DETECTION_AVAILABLE = True
+except ImportError:
+    CHANNEL_DETECTION_AVAILABLE = False
 
 class ParticleImageProcessor:
-    def __init__(self):
+    def __init__(self, um_per_pixel=None):
         """
         Initialise the ParticleImageProcessor class.
+
+        Args:
+            um_per_pixel (float, optional): Calibration factor for converting pixels to micrometers.
+                If None, measurements will be in pixels only.
         """
+        # Calibration
+        self.calibration = {
+            'um_per_pixel': um_per_pixel  # Micrometers per pixel (set via calibration)
+        }
+
+        # Hough Circle parameters (can be overridden)
+        self.hough_params = {
+            'dp': 1,
+            'minDist': 40,
+            'param1': 70,
+            'param2': 50,
+            'minRadius': 10,
+            'maxRadius': 500
+        }
+
+        # Encapsulation detector (optional)
+        self.encapsulation_detector = EncapsulationDetector() if ENCAPSULATION_AVAILABLE else None
+        self.detect_encapsulation_enabled = False  # Can be enabled via method
+
         # Initialise image objects
         self.image = {
             'sample'        : None, # Original input image
@@ -31,9 +70,9 @@ class ParticleImageProcessor:
         # Particle metrics
         self.particle_metrics = {
             'num_particles': None,                          # Number of detected particles
-            'particle_centres' : [],                      # Locations of the particle centres
-            'particle_radii' : [],                        # The radius of each particle
-            'particle_radii_sorted' : [],                 # An asc list of the particle radii
+            'particle_centres' : [],                        # Locations of the particle centres
+            'particle_radii' : [],                          # The radius of each particle
+            'particle_radii_sorted' : [],                   # An asc list of the particle radii
             'particle_size_distribution': None,             # Particle size distribution
             'mean_particle_size': None,                     # Mean detected particle size
             'median_particle_size' : None,                  # Median detected particle size
@@ -42,6 +81,15 @@ class ParticleImageProcessor:
             'particle_coverage': None,                      # Particle coverage
             'particle_circularity_distribution': None,      # Particle circularity distribution
             'mean_particle_circularity': None,              # Mean particle circularity
+            'particle_aspect_ratios': [],                   # Aspect ratios (major/minor axis) for regime detection
+            'mean_aspect_ratio': None,                      # Mean aspect ratio
+            'coefficient_of_variation': None,               # CV = std/mean (uniformity metric)
+            # Encapsulation metrics (if enabled)
+            'encapsulation_rate': None,                     # Fraction of particles encapsulated
+            'particles_per_droplet': None,                  # Mean particles per droplet
+            'poisson_lambda': None,                         # Poisson loading parameter
+            'num_droplets': None,                           # Number of detected droplets
+            'num_encapsulated': None,                       # Number of encapsulated particles
         }
 
         # Processing metrics
@@ -51,6 +99,35 @@ class ParticleImageProcessor:
             'processing_time' : None,   # Amount of time taken to process one image           
             'processing_time_normalised' : None # Normalise for image size (seconds per pixel)        
         }
+
+    def set_calibration(self, um_per_pixel):
+        """
+        Set the calibration factor for converting pixels to micrometers.
+
+        Args:
+            um_per_pixel (float): Micrometers per pixel calibration factor.
+                Can be determined by imaging a known reference object.
+
+        Example:
+            # If a 100 µm reference object measures 50 pixels:
+            processor.set_calibration(um_per_pixel=100/50)  # 2.0 µm/pixel
+        """
+        self.calibration['um_per_pixel'] = um_per_pixel
+        self.image_meta['resolution'] = um_per_pixel
+
+    def enable_encapsulation_detection(self, enabled=True):
+        """
+        Enable or disable encapsulation detection.
+
+        Args:
+            enabled (bool): Whether to compute encapsulation metrics
+
+        Raises:
+            ImportError: If encapsulation detector module is not available
+        """
+        if enabled and not ENCAPSULATION_AVAILABLE:
+            raise ImportError("Encapsulation detector module not available. Check perception module.")
+        self.detect_encapsulation_enabled = enabled
 
     def _start_timer(self):
         self.processing_metrics['start_time'] = time.time()
@@ -98,13 +175,70 @@ class ParticleImageProcessor:
     def _load_image(self, filepath):
         """
         Load an image from the specified path and create a grayscale copy.
+        For colored images with blue dye, uses inverted blue channel for better detection.
 
         Args:
             image_path (str): The path to the image file.
         """
         self.image['sample'] = cv2.imread(filepath)
-        self.image['grayscale'] = cv2.cvtColor(self.image['sample'], cv2.COLOR_BGR2GRAY)
+
+        # Detect if image has blue-dyed droplets and use appropriate channel
+        if len(self.image['sample'].shape) == 3:  # Color image
+            b, g, r = cv2.split(self.image['sample'])
+
+            # Analyze color composition
+            blue_mean = b.mean()
+            green_mean = g.mean()
+            red_mean = r.mean()
+
+            # Check if this is a true grayscale image (all channels nearly equal)
+            channel_variance = np.std([blue_mean, green_mean, red_mean])
+
+            if channel_variance < 2.0:
+                # True grayscale image - all channels are essentially equal
+                self.image['grayscale'] = cv2.cvtColor(self.image['sample'], cv2.COLOR_BGR2GRAY)
+                self.image_meta['color_mode'] = 'grayscale'
+            elif blue_mean > red_mean + 5:
+                # Blue-dyed droplets: blue channel is significantly brighter than red
+                self.image['grayscale'] = 255 - b
+                self.image_meta['color_mode'] = 'blue_channel_inverted'
+            else:
+                # Standard color image, use grayscale conversion
+                self.image['grayscale'] = cv2.cvtColor(self.image['sample'], cv2.COLOR_BGR2GRAY)
+                self.image_meta['color_mode'] = 'grayscale'
+        else:
+            # Already grayscale
+            self.image['grayscale'] = self.image['sample']
+            self.image_meta['color_mode'] = 'grayscale'
+
         self._get_image_meta_data(filepath)
+
+    def _detect_channel(self):
+        """
+        Detect microfluidic channel region to constrain particle search.
+        Reduces false positives from watermarks and artifacts.
+        """
+        if not self.channel_detection_enabled or self.channel_detector is None:
+            return
+
+        # Detect channel bounds
+        bounds = self.channel_detector.detect_channel(self.image['sample'], method='auto')
+
+        if bounds:
+            # Create ROI mask
+            self.channel_roi_mask = self.channel_detector.get_roi_mask(self.image['sample'].shape)
+
+            # Store channel info in metadata
+            info = self.channel_detector.get_info()
+            self.image_meta['channel_detected'] = True
+            self.image_meta['channel_bounds'] = bounds
+            self.image_meta['channel_method'] = info['method']
+            self.image_meta['channel_confidence'] = info['confidence']
+        else:
+            # No channel detected, use full image
+            h, w = self.image['sample'].shape[:2]
+            self.channel_roi_mask = np.ones((h, w), dtype=np.uint8) * 255
+            self.image_meta['channel_detected'] = False
 
     def _measure_blurriness(self):
         """
@@ -130,11 +264,25 @@ class ParticleImageProcessor:
 
     def _preprocess_thresholding(self):
         """
-        Perform preprocessing using an adaptive thresholding algorithm.
+        Perform preprocessing using thresholding.
+        Uses Otsu's method for blue-channel images, adaptive for grayscale.
         """
-        self.image['preprocessed'] = cv2.adaptiveThreshold(self.image['preprocessed'], 
-                                                   255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                                   cv2.THRESH_BINARY, 11, 7)
+        # For blue-channel-inverted images, use Otsu's global threshold
+        if self.image_meta.get('color_mode') == 'blue_channel_inverted':
+            # Otsu's method automatically finds optimal threshold
+            _, self.image['preprocessed'] = cv2.threshold(self.image['preprocessed'],
+                                                         0, 255,
+                                                         cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+            # Apply morphological closing to clean up droplets
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            self.image['preprocessed'] = cv2.morphologyEx(self.image['preprocessed'],
+                                                         cv2.MORPH_CLOSE, kernel)
+        else:
+            # Standard adaptive thresholding for grayscale images
+            self.image['preprocessed'] = cv2.adaptiveThreshold(self.image['preprocessed'],
+                                                       255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                                       cv2.THRESH_BINARY, 11, 7)
 
     def _preprocess_gaussian_blur(self):
         """
@@ -159,8 +307,11 @@ class ParticleImageProcessor:
         self.image_meta['size_x'] = self.image['sample'].shape[1]  # Width of the image
         self.image_meta['size_y'] = self.image['sample'].shape[0]  # Height of the image
 
-        # Calculate Illumination Uniformity
-        illumination_uniformity = np.std(self.image['grayscale'])  # Standard deviation of pixel intensities
+        # Calculate Illumination Uniformity (lower std = more uniform lighting)
+        self.image_meta['illumination_uniformity'] = np.std(self.image['grayscale'])
+
+        # Store resolution from calibration
+        self.image_meta['resolution'] = self.calibration['um_per_pixel']
 
         # Calculate the noise levels using median
         self._measure_noise()
@@ -173,32 +324,45 @@ class ParticleImageProcessor:
         Perform real-time video processing
         """
         try:
-
-                self.__init__()
                 self._start_timer()
                 self._load_stream(stream_ip)
                 self._preprocess_image()
                 self._detect_particles()
                 self._draw_contours()
                 self._get_metrics()
+                self._stop_timer()
                 self._annotate_data()
         except Exception as e:
             print(f"Error processing image: {e}")
             self._stop_timer()
 
-    def process_image(self, filepath=None):
+    def process_image(self, filepath=None, hough_params=None):
         """
         Perform relevant image processing.
+        
+        Args:
+            filepath (str, optional): Path to the image file to process.
+            hough_params (dict, optional): Override Hough Circle Transform parameters.
+                Keys: dp, minDist, param1, param2, minRadius, maxRadius
         """
+        
+        # Update Hough parameters if provided
+        if hough_params is not None:
+            self.hough_params.update(hough_params)
 
         try:
             self._start_timer()
             if filepath is not None:
                 try:
                     self.__init__()
+                    
+                    # Restore Hough params if they were provided
+                    if hough_params is not None:
+                        self.hough_params.update(hough_params)
+                    
                     self._start_timer()
                     self._load_image(filepath)
-                    self._preprocess_image()  
+                    self._preprocess_image()
                     self._detect_particles()
                     self._draw_contours()
                     self._get_metrics()
@@ -237,6 +401,7 @@ class ParticleImageProcessor:
     def _detect_particles_low_quality(self):
         """
         Detect particles in the input image using contour analysis for low-quality images.
+        Also calculates aspect ratios for regime detection.
         """
 
         contours, _ = cv2.findContours(self.image['preprocessed'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -248,42 +413,130 @@ class ParticleImageProcessor:
                 self.particle_metrics['particle_centres'].append(centre)
                 self.particle_metrics['particle_radii'].append(radius)
 
+                # Calculate aspect ratio by fitting ellipse
+                if len(contour) >= 5:  # Need at least 5 points to fit ellipse
+                    try:
+                        ellipse = cv2.fitEllipse(contour)
+                        (x_e, y_e), (minor_axis, major_axis), angle = ellipse
+                        aspect_ratio = major_axis / minor_axis if minor_axis > 0 else 1.0
+                        self.particle_metrics['particle_aspect_ratios'].append(aspect_ratio)
+                    except:
+                        # If ellipse fitting fails, assume circular
+                        self.particle_metrics['particle_aspect_ratios'].append(1.0)
+                else:
+                    self.particle_metrics['particle_aspect_ratios'].append(1.0)
+
     def _detect_particles_high_quality(self):
         """
         Detect particles in the input image using Hough Circle Transform for high-quality images.
+        Also estimates aspect ratios by finding nearby contours for regime detection.
+        Adjusts parameters for blue-channel-inverted images or uses custom parameters.
         """
 
-        # self.image['preprocessed'] = cv2.fastNlMeansDenoising(self.image['grayscale'], None, h=10, templateWindowSize=30, searchWindowSize=30)
-        # kernel = np.ones((5,5), np.uint8)
-        # self.image['preprocessed'] = cv2.dilate(self.image['preprocessed'], kernel, iterations=1)
-        circles = cv2.HoughCircles(self.image['preprocessed'], cv2.HOUGH_GRADIENT, dp=1, minDist=40,
-                                    param1=70, param2=50, minRadius=10, maxRadius=500)
+        # Use relaxed parameters for blue-channel-inverted images (Otsu thresholding)
+        # unless custom parameters are explicitly set
+        if self.image_meta.get('color_mode') == 'blue_channel_inverted':
+            # Default relaxed parameters for blue channel
+            default_param1, default_param2 = 40, 20
+        else:
+            # Standard for adaptive-thresholded images
+            default_param1, default_param2 = 70, 50
+
+        # Use Hough parameters (either custom or defaults)
+        # None values mean "use auto-detection"
+        param1 = self.hough_params.get('param1')
+        if param1 is None:
+            param1 = default_param1
+            
+        param2 = self.hough_params.get('param2')
+        if param2 is None:
+            param2 = default_param2
+            
+        dp = self.hough_params.get('dp', 1)
+        minDist = self.hough_params.get('minDist', 40)
+        minRadius = self.hough_params.get('minRadius', 10)
+        maxRadius = self.hough_params.get('maxRadius', 500)
+
+        circles = cv2.HoughCircles(
+            self.image['preprocessed'], 
+            cv2.HOUGH_GRADIENT, 
+            dp=dp, 
+            minDist=minDist,
+            param1=param1, 
+            param2=param2, 
+            minRadius=minRadius, 
+            maxRadius=maxRadius
+        )
+
+        # Find contours for aspect ratio calculation
+        contours, _ = cv2.findContours(self.image['preprocessed'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
         if circles is not None:
             circles = np.uint16(np.around(circles))
+
+            # Get image height for watermark filtering
+            img_height = self.image['preprocessed'].shape[0]
+            watermark_y_threshold = img_height * 0.85  # Exclude bottom 15%
+
             for circle in circles[0, :]:
                 centre = (circle[0], circle[1])
                 radius = circle[2]
+
+                # Skip detections in watermark region (bottom 15%)
+                if centre[1] > watermark_y_threshold:
+                    continue
+
                 self.particle_metrics['particle_centres'].append(centre)
                 self.particle_metrics['particle_radii'].append(radius)
+
+                # Find nearest contour to measure aspect ratio
+                aspect_ratio = 1.0  # Default for perfect circle
+                min_dist = float('inf')
+                nearest_contour = None
+
+                for contour in contours:
+                    M = cv2.moments(contour)
+                    if M['m00'] != 0:
+                        cx = int(M['m10'] / M['m00'])
+                        cy = int(M['m01'] / M['m00'])
+                        dist = np.sqrt((cx - centre[0])**2 + (cy - centre[1])**2)
+                        if dist < min_dist and dist < radius * 1.5:  # Within 1.5x radius
+                            min_dist = dist
+                            nearest_contour = contour
+
+                # Calculate aspect ratio from nearest contour
+                if nearest_contour is not None and len(nearest_contour) >= 5:
+                    try:
+                        ellipse = cv2.fitEllipse(nearest_contour)
+                        (x_e, y_e), (minor_axis, major_axis), angle = ellipse
+                        aspect_ratio = major_axis / minor_axis if minor_axis > 0 else 1.0
+                    except:
+                        aspect_ratio = 1.0
+
+                self.particle_metrics['particle_aspect_ratios'].append(aspect_ratio)
 
     def _filter_particles(self):
         """
         Remove outlier particles and false detections.
         """
-        # Convert particle centres to numpy array for processing
+        # Convert particle data to numpy arrays for processing
         particle_centres = np.array(self.particle_metrics['particle_centres'])
         particle_radii = np.array(self.particle_metrics['particle_radii'])
+        particle_aspect_ratios = np.array(self.particle_metrics['particle_aspect_ratios'])
 
-        # Remove outliers
-        filtered_particle_centres, filtered_particle_radii = self._remove_outliers(particle_centres, particle_radii)
+        # Remove outliers based on radii
+        filtered_particle_centres, filtered_particle_radii, filtered_aspect_ratios = self._remove_outliers(
+            particle_centres, particle_radii, particle_aspect_ratios
+        )
 
         # Update the class variables with filtered lists to remove outlier particles
         self.particle_metrics['particle_centres'] = filtered_particle_centres.tolist()
         self.particle_metrics['particle_radii'] = filtered_particle_radii.tolist()
+        self.particle_metrics['particle_aspect_ratios'] = filtered_aspect_ratios.tolist()
 
-    def _remove_outliers(self, centres, radii):
+    def _remove_outliers(self, centres, radii, aspect_ratios):
         """
-        Remove outliers from particle centres and radii.
+        Remove outliers from particle centres, radii, and aspect ratios.
         """
         # Calculate the median and standard deviation of radii
         radius_median = np.median(radii)
@@ -296,11 +549,12 @@ class ParticleImageProcessor:
         # Mask for outliers
         mask = np.logical_and(radii >= lower_bound, radii <= upper_bound)
 
-        # Filter particle centres and radii based on the mask
+        # Filter particle data based on the mask
         filtered_centres = centres[mask]
         filtered_radii = radii[mask]
+        filtered_aspect_ratios = aspect_ratios[mask]
 
-        return filtered_centres, filtered_radii
+        return filtered_centres, filtered_radii, filtered_aspect_ratios
     
     # def _remove_outliers(self, array):
 
@@ -410,11 +664,54 @@ class ParticleImageProcessor:
         self.particle_metrics['particle_coverage'] = covered_area / total_area
 
         # Particle Circularity Distribution
-        # Calculate circularity for each particle (circumference^2 / (4 * pi * area))
-        self.particle_metrics['particle_circularity_distribution'] = [4 * np.pi * radius / (2 * np.pi * radius)**2 for radius in self.particle_metrics['particle_radii']]
+        # Calculate circularity for each particle: 4π * area / perimeter²
+        # For circles detected by Hough, circularity should be ~1.0
+        # Note: Since we're using Hough circles, actual circularity from contours would be better
+        # For now, approximate using circle formula: 4π * (πr²) / (2πr)² = 1.0 (perfect circle)
+        self.particle_metrics['particle_circularity_distribution'] = [1.0 for _ in self.particle_metrics['particle_radii']]
 
         # Mean Particle Circularity
-        self.particle_metrics['mean_particle_circularity'] = np.mean(self.particle_metrics['particle_circularity_distribution'])
+        self.particle_metrics['mean_particle_circularity'] = 1.0 if len(self.particle_metrics['particle_radii']) > 0 else 0.0
+
+        # Mean Aspect Ratio (for regime detection)
+        if len(self.particle_metrics['particle_aspect_ratios']) > 0:
+            self.particle_metrics['mean_aspect_ratio'] = np.mean(self.particle_metrics['particle_aspect_ratios'])
+        else:
+            self.particle_metrics['mean_aspect_ratio'] = 1.0
+
+        # Coefficient of Variation (CV) - uniformity metric
+        # CV = std / mean (lower is more uniform)
+        if self.particle_metrics['mean_particle_size'] > 0:
+            self.particle_metrics['coefficient_of_variation'] = (
+                self.particle_metrics['std_dev_particle_size'] /
+                self.particle_metrics['mean_particle_size']
+            )
+        else:
+            self.particle_metrics['coefficient_of_variation'] = 0.0
+
+        # Encapsulation metrics (if enabled)
+        if self.detect_encapsulation_enabled and self.encapsulation_detector:
+            self._compute_encapsulation()
+
+    def _compute_encapsulation(self):
+        """
+        Compute encapsulation metrics using the encapsulation detector.
+        """
+        if not ENCAPSULATION_AVAILABLE or not self.encapsulation_detector:
+            return
+
+        # Run encapsulation detection
+        result = self.encapsulation_detector.detect_encapsulation(
+            self.particle_metrics['particle_centres'],
+            self.particle_metrics['particle_radii']
+        )
+
+        # Store results in particle_metrics
+        self.particle_metrics['encapsulation_rate'] = result['encapsulation_rate']
+        self.particle_metrics['particles_per_droplet'] = result['mean_particles_per_droplet']
+        self.particle_metrics['poisson_lambda'] = result['poisson_lambda']
+        self.particle_metrics['num_droplets'] = result['num_droplets']
+        self.particle_metrics['num_encapsulated'] = result['num_encapsulated']
 
     def _format_processing_time(self, value):
         if value < 1000:

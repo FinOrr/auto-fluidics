@@ -1,0 +1,15 @@
+# Auto-Fluidics Dependencies
+
+# Core
+opencv-python>=4.8.0
+numpy>=1.24.0
+pyyaml>=6.0  # For batch video processing config
+
+# Dashboard
+streamlit>=1.28.0
+pandas>=2.0.0
+
+# Optional: ML-based regime classifier
+# Uncomment to enable ML classifier:
+# tensorflow>=2.13.0
+# matplotlib>=3.7.0  # For training visualization

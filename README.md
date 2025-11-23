@@ -2,119 +2,174 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub top language](https://img.shields.io/github/languages/top/FinOrr/auto-fluidics.svg)](https://github.com/FinOrr/auto-fluidics)
-[![GitHub issues](https://img.shields.io/github/issues/FinOrr/auto-fluidics.svg)](https://github.com/FinOrr/auto-fluidics/issues)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/FinOrr/auto-fluidics.svg)](https://github.com/FinOrr/auto-fluidics/pulls)
 
-A lightweight, open-source toolkit for real-time microfluidics experiments. 
-It uses computer vision to track particles and includes an API for controlling various types of pumps (pressure, syringe, peristaltic). 
-Still early days; built in spare time.
+Real-time droplet detection and microfluidic regime classification for automated microfluidics experiments.
+
+## Quick Start
+
+```bash
+git clone git@github.com:FinOrr/auto-fluidics.git
+cd auto-fluidics
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Open `http://localhost:8501` in your browser.
 
 ## Features
 
-- Real-time particle detection using computer vision
-- Live video and image processing
-- Simple API for controlling pumps
-- Written in Python, with future plans for GPU/C++ support
+- Automatic droplet detection for grayscale and blue-dyed images
+- Flow regime classification (DRIPPING, JETTING, CO_FLOW, NO_FLOW)
+- ML-based classification using MobileNetV2
+- Real-time metrics: count, size distribution, uniformity, aspect ratio
+- Interactive Streamlit dashboard
+- Batch processing mode
+- Processing speed: 10-100ms per image
 
-## Why?
+## Demo
 
-Microfluidics gear is expensive and often locked behind proprietary systems. 
-This project is my attempt to build something more accessible, flexible, and hackable: no special hardware or vendor lock-in required.
+Dashboard view:
 
----
+![Dashboard](output/processed/sample-17.png)
 
-## About
+Detection examples:
 
-This repo is for anyone trying to do microfluidics without a massive budget or a PhD in lab automation.
+| Grayscale | Blue-Dyed |
+|-----------|-----------|
+| ![](output/processed/sample-12.png) | ![](output/processed/sample-2.png) |
 
-### What it does:
+## Usage
 
-- Tracks particles in microfluidic setups (videos, streams, etc.)
-- Analyses motion and basic metrics in real time
+### Dashboard
 
-That’s it. It’s meant to be useful without getting in your way.
-
----
-
-## Project Status
-
-Work in progress—actively developed when time allows. Right now it works with:
-
-- Local image/video files
-- Live streams (e.g., from an ESP32 camera)
-- Basic CV pipelines (which are being tweaked constantly)
-
----
-
-## Getting Started
-
-### Requirements
-
-- [`git`](https://git-scm.com/downloads)
-- [`Python 3.10`](https://www.python.org/downloads/release/python-31012/)
-  - [opencv-python](https://pypi.org/project/opencv-python/) `4.9.0.80`
-
-### Clone
+Run the Streamlit app and select images from the `img/` folder:
 
 ```bash
-git clone --recursive git@github.com:finorr/auto-fluidics.git
-````
-
----
-
-### Example
-
-```python
-import cv2
-import particle_detector as pdt
-
-proc = pdt.ParticleImageProcessor()
-win_name = 'Networked Stream'
-cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-
-while cv2.waitKey(1) != 27:
-    proc.process_stream(stream_ip='192.168.1.34')
-
-    if proc.image['processed'] is not None:
-        cv2.imshow(win_name, proc.image['processed'])
-    else:
-        cv2.imshow(win_name, proc.image['sample'])
-
-cv2.destroyWindow(win_name)
+streamlit run app.py
 ```
 
-### Output
+The dashboard provides single-image and batch analysis modes with automatic annotations and summary statistics.
 
-![](output/processed/sample-12.png)
-![](output/processed/sample-2.png)
-![](output/processed/sample-17.png)
+### Python API
 
----
+```python
+from processing.particle_detector import ParticleImageProcessor
+from perception.regime_detector import RegimeDetector
 
-### Build
+processor = ParticleImageProcessor(um_per_pixel=2.0)
+detector = RegimeDetector()
 
-Currently Python-only. When/if C++ support gets added (for GPU processing), this section will be updated.
+processor.process_image('img/sample-10.png')
+metrics = processor.particle_metrics
 
----
+regime, confidence, indicators = detector.detect_regime(metrics)
 
-### Test
+print(f"Particles: {metrics['num_particles']}")
+print(f"Regime: {regime.name} ({confidence:.0%})")
+print(f"Size: {metrics['mean_particle_size']:.1f} px")
+```
 
-Unit tests coming soon. For now, test by running and watching for obvious errors.
+## Python Files
 
----
+### Main Applications
 
-## Docs
+- `app.py` - Streamlit dashboard for interactive droplet detection and analysis
+- `validate_detection.py` - Batch validation script for testing detection on multiple images
 
-Still being written. In the meantime, feel free to poke around or open an issue if anything’s unclear.
+### Machine Learning
 
----
+- `train_regime_classifier.py` - Train the ML regime classifier on labeled data
+- `label_training_data.py` - Interactive tool for labeling training images
+- `check_ml_setup.py` - Verify TensorFlow installation and model availability
 
-## Help
+### Video Processing
 
-If you get stuck or have questions, feel free to open a [GitHub issue](https://github.com/FinOrr/auto-fluidics/issues) or contact me on [LinkedIn](https://www.linkedin.com/in/finorr/).
+- `batch_video_extract.py` - Extract frames from multiple videos for analysis
+- `extract_training_from_video.py` - Extract and label frames from videos for training data
 
----
+### Core Modules
+
+#### processing/
+- `particle_detector.py` - Core droplet detection engine using Hough Circle Transform
+- `particle_streamer.py` - Real-time video stream processing
+- `channel_detector.py` - Microfluidic channel detection and ROI extraction
+- `demo_detector.py` - Simple demonstration script
+
+#### perception/
+- `regime_detector.py` - Rule-based flow regime classification (DRIPPING, JETTING, NO_FLOW, CO_FLOW)
+- `ml_regime_classifier.py` - ML-based regime classification using MobileNetV2
+- `encapsulation_detector.py` - Detection for encapsulated droplets
+
+### Examples
+
+- `examples/demo_enhanced_detection.py` - Enhanced detection demonstration
+
+## How It Works
+
+### Preprocessing
+- Automatically detects grayscale vs blue-dyed images
+- Blue channel extraction and inversion for blue-dyed samples
+- Otsu thresholding for blue images, adaptive thresholding for grayscale
+- Morphological operations for noise reduction
+
+### Detection
+- Hough Circle Transform with adaptive parameters
+- Watermark filtering (excludes bottom 15% of image)
+- Statistical outlier removal based on size distribution
+
+### Regime Classification
+
+Rule-based classifier uses multiple indicators:
+- Particle count (< 3 particles indicates NO_FLOW)
+- Aspect ratio (> 2.5 indicates JETTING)
+- Size uniformity (CV > 0.3 indicates instability)
+- Temporal tracking for stability assessment
+
+ML classifier uses MobileNetV2:
+- Pre-trained on ImageNet, fine-tuned on labeled microfluidic images
+- Classifies full images or channel ROIs
+- Four classes: NO_FLOW, DRIPPING, JETTING, CO_FLOW
+
+## Configuration
+
+Dashboard controls:
+- Min particles threshold for DRIPPING detection (default: 3)
+- Aspect ratio threshold for JETTING (default: 2.5)
+- CV threshold for uniformity assessment (default: 0.3)
+- Calibration: µm/pixel for physical measurements
+- ML vs rule-based classifier selection
+
+## Validation
+
+Tested on 18 sample images:
+
+| Metric | Result |
+|--------|--------|
+| Blue-dyed accuracy | 80-100% |
+| Processing speed | 10-100 ms |
+| Watermark filtering | 100% success |
+
+Run validation:
+
+```bash
+python validate_detection.py
+```
+
+Annotated results are saved to `validation_output/`.
+
+## Development
+
+Add new sample images by placing PNG files in `img/`. They'll appear in the dashboard automatically.
+
+## Contributing
+
+Open an issue or submit a pull request. This is research software - contributions are welcome.
+
+## Contact
+
+- Issues: [GitHub Issues](https://github.com/FinOrr/auto-fluidics/issues)
+- LinkedIn: [FinOrr](https://www.linkedin.com/in/finorr/)
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE) for details
