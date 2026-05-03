@@ -56,4 +56,5 @@ training_data/
 validation_output/
 output/
 img/
+videos/
 *__pycache__*

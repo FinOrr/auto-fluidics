@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "bacha-vision"
+version = "0.1.0"
+description = "Microfluidic droplet detection and flow regime classification"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dashboard = [
+    "streamlit>=1.28.0",
+    "pandas>=2.0.0",
+]
+ml = [
+    "tensorflow>=2.13.0",
+    "matplotlib>=3.7.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.scripts]
+bacha-validate   = "scripts.validate:main"
+bacha-train      = "scripts.train_classifier:main"
+bacha-label      = "scripts.label_data:main"
+bacha-dashboard  = "dashboard.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bacha_vision*"]
